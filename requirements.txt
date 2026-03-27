@@ -1,0 +1,14 @@
+# Core
+click
+duckdb>=0.10.0
+openai
+python-dotenv
+pyyaml
+
+# File parsers
+pypdf>=3.0.0
+python-docx
+python-frontmatter
+
+# Directory watching
+watchdog>=3.0.0
