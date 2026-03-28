@@ -1,0 +1,42 @@
+# Environment
+.env
+
+# Database
+db/*.duckdb
+db/*.duckdb.wal
+db/scheduler.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+*.DS_Store
+
+# Logs
+logs/
+*.log
+nohup.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code workspace
+.claude/
+
+# Output (optional: comment out if you want to track exports)
+output/*
+!output/.gitkeep
