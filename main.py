@@ -314,8 +314,11 @@ def export_cmd(ctx, output_dir, limit, sync):
     """Export processed documents to Markdown (writes to all configured output dirs)."""
     from src.output.exporter import FileExporter
 
-    primary = output_dir or _PRIMARY_OUT
-    out_dirs = [d for d in [primary, _NAS_OUT] if d]
+    # Build list of output directories
+    primary = output_dir or os.environ.get("OUTPUT_DIR", "output")
+    secondary = os.environ.get("OUTPUT_DIR_2", "")
+    out_dirs = [d for d in [primary, secondary] if d]
+
     store = _get_store(_db_path(ctx.obj))
     exporter = FileExporter(out_dirs)
 
@@ -332,7 +335,7 @@ def export_cmd(ctx, output_dir, limit, sync):
 @cli.command("organize")
 @click.argument("src_dir")
 @click.option("--output-dir", "-o", default=None,
-              help="Destination root (default: <src_dir>/organized/)")
+              help="Destination root (default: OUTPUT_DIR env)")
 @click.option("--mode", default="by-category",
               type=click.Choice(["by-category", "by-type"]),
               show_default=True,
@@ -376,7 +379,7 @@ def organize_cmd(src_dir, output_dir, mode, action, subdir_by_type,
         click.echo(f"[error] Directory not found: {src_dir}", err=True)
         sys.exit(1)
 
-    out = output_dir or _PRIMARY_OUT
+    out = output_dir or os.environ.get("OUTPUT_DIR", "output")
     extensions = [e.strip() for e in ext.split(",")] if ext else None
 
     llm_client = None
@@ -401,18 +404,16 @@ def organize_cmd(src_dir, output_dir, mode, action, subdir_by_type,
     click.echo(f"Organizing '{src_dir}' → '{out}' (mode={mode}, action={action})...")
     summary = organizer.organize_directory(src_dir)
 
-    # Print per-file results
     for r in summary.results:
         src_rel = os.path.relpath(r.src, src_dir)
-        dst_rel = os.path.relpath(r.dst, out) if r.success else "—"
         status = "ok" if r.success else "fail"
         click.echo(f"  [{status}] {src_rel}")
         if r.success:
-            click.echo(f"        → {r.category}/{os.path.basename(r.dst)}")
+            dst_rel = os.path.relpath(r.dst, out)
+            click.echo(f"        → {dst_rel}")
         else:
             click.echo(f"        error: {r.error}")
 
-    # Summary
     click.echo("")
     click.echo(f"Done: {summary.succeeded} ok, {summary.failed} failed  "
                f"(total {summary.total})")
@@ -421,9 +422,7 @@ def organize_cmd(src_dir, output_dir, mode, action, subdir_by_type,
     for cat, count in summary.by_category().items():
         click.echo(f"  {cat:16s} {count}")
 
-    # Sync organized output to NAS
-    nas_out = os.environ.get("OUTPUT_DIR_NAS", _NAS_OUT)
-    _sync_to_nas(out, nas_out)
+
 
 
 # ── convert command ──────────────────────────────────────────────────────────
