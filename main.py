@@ -306,18 +306,23 @@ def watch_cmd(ctx, dir_path, recursive, ext, run_ai):
 # ── export command ────────────────────────────────────────────────────────────
 
 @cli.command("export")
-@click.option("--output-dir", default=None)
+@click.option("--output-dir", default=None, help="Primary output dir (overrides OUTPUT_DIR env)")
 @click.option("--limit", default=50, show_default=True)
+@click.option("--sync/--no-sync", default=True, help="Sync output dirs after export (default: on)")
 @click.pass_context
-def export_cmd(ctx, output_dir, limit):
-    """Export processed documents to Markdown."""
+def export_cmd(ctx, output_dir, limit, sync):
+    """Export processed documents to Markdown (writes to all configured output dirs)."""
     from src.output.exporter import FileExporter
 
     out = output_dir or _PRIMARY_OUT
     store = _get_store(_db_path(ctx.obj))
-    exporter = FileExporter(out)
+    exporter = FileExporter(out_dirs)
+
+    if sync:
+        exporter.sync_output_dirs()
+
     paths = exporter.export_from_store(store, limit=limit)
-    click.echo(f"[done] Exported {len(paths)} files to {out}")
+    click.echo(f"[done] Exported {len(paths)} files to: {', '.join(out_dirs)}")
     store.close()
     _sync_to_nas(out, _NAS_OUT)
 

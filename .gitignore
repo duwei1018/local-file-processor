@@ -34,6 +34,9 @@ nohup.out
 *.swp
 *.swo
 
+# Claude Code workspace
+.claude/
+
 # Output (optional: comment out if you want to track exports)
 output/*
 !output/.gitkeep
