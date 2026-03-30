@@ -314,7 +314,8 @@ def export_cmd(ctx, output_dir, limit, sync):
     """Export processed documents to Markdown (writes to all configured output dirs)."""
     from src.output.exporter import FileExporter
 
-    out = output_dir or _PRIMARY_OUT
+    primary = output_dir or _PRIMARY_OUT
+    out_dirs = [d for d in [primary, _NAS_OUT] if d]
     store = _get_store(_db_path(ctx.obj))
     exporter = FileExporter(out_dirs)
 
@@ -324,7 +325,6 @@ def export_cmd(ctx, output_dir, limit, sync):
     paths = exporter.export_from_store(store, limit=limit)
     click.echo(f"[done] Exported {len(paths)} files to: {', '.join(out_dirs)}")
     store.close()
-    _sync_to_nas(out, _NAS_OUT)
 
 
 # ── organize command ─────────────────────────────────────────────────────────
