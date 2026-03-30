@@ -13,6 +13,40 @@ load_dotenv()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# ── output directory helpers ──────────────────────────────────────────────────
+
+_PRIMARY_OUT = os.environ.get(
+    "OUTPUT_DIR",
+    os.path.expanduser("~/Desktop/local-file-processor output"),
+)
+_NAS_OUT = os.environ.get(
+    "OUTPUT_DIR_NAS",
+    os.path.expanduser(
+        "~/Library/CloudStorage/SynologyDrive-duwei/行业研究/local-file-processor output"
+    ),
+)
+
+
+def _sync_to_nas(src_dir: str, dst_dir: str) -> None:
+    """Mirror src_dir → dst_dir using rsync (best-effort, never fails loudly)."""
+    import subprocess
+    try:
+        if not os.path.isdir(src_dir):
+            return
+        os.makedirs(dst_dir, exist_ok=True)
+        result = subprocess.run(
+            ["rsync", "-a", "--delete", f"{src_dir}/", f"{dst_dir}/"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode == 0:
+            click.echo(f"[sync] NAS updated: {dst_dir}")
+        else:
+            click.echo(f"[sync] rsync warning: {result.stderr.strip()[:120]}", err=True)
+    except FileNotFoundError:
+        click.echo("[sync] rsync not found — skipping NAS sync", err=True)
+    except Exception as e:
+        click.echo(f"[sync] NAS sync failed: {e}", err=True)
+
 
 def _db_path(ctx_obj: dict) -> str:
     return ctx_obj.get("db_path") or os.environ.get("DB_PATH", "db/local_files.duckdb")
@@ -279,12 +313,158 @@ def export_cmd(ctx, output_dir, limit):
     """Export processed documents to Markdown."""
     from src.output.exporter import FileExporter
 
-    out = output_dir or os.environ.get("OUTPUT_DIR", "output")
+    out = output_dir or _PRIMARY_OUT
     store = _get_store(_db_path(ctx.obj))
     exporter = FileExporter(out)
     paths = exporter.export_from_store(store, limit=limit)
     click.echo(f"[done] Exported {len(paths)} files to {out}")
     store.close()
+    _sync_to_nas(out, _NAS_OUT)
+
+
+# ── organize command ─────────────────────────────────────────────────────────
+
+@cli.command("organize")
+@click.argument("src_dir")
+@click.option("--output-dir", "-o", default=None,
+              help="Destination root (default: <src_dir>/organized/)")
+@click.option("--mode", default="by-category",
+              type=click.Choice(["by-category", "by-type"]),
+              show_default=True,
+              help="by-category: classify by content; by-type: classify by extension")
+@click.option("--action", default="copy",
+              type=click.Choice(["copy", "move"]),
+              show_default=True,
+              help="copy (safe) or move files")
+@click.option("--subdir-by-type", is_flag=True,
+              help="In by-category mode, also create extension sub-folders")
+@click.option("--no-recursive", is_flag=True,
+              help="Do not walk subdirectories")
+@click.option("--ext", default=None,
+              help="Comma-separated extensions to process, e.g. .pdf,.md")
+@click.option("--llm", "use_llm", is_flag=True,
+              help="Use LLM for classification instead of rule-based")
+def organize_cmd(src_dir, output_dir, mode, action, subdir_by_type,
+                 no_recursive, ext, use_llm):
+    """Classify and organize files into category folders.
+
+    \b
+    Examples:
+      # Rule-based category folders (offline, fast)
+      python main.py organize input/
+
+      # Extension folders
+      python main.py organize input/ --mode by-type
+
+      # Move instead of copy, with type sub-folders
+      python main.py organize input/ --action move --subdir-by-type
+
+      # LLM-powered classification
+      python main.py organize input/ --llm
+
+      # Specify output directory
+      python main.py organize input/ -o sorted/
+    """
+    from src.organizer import FileOrganizer
+
+    if not os.path.isdir(src_dir):
+        click.echo(f"[error] Directory not found: {src_dir}", err=True)
+        sys.exit(1)
+
+    out = output_dir or _PRIMARY_OUT
+    extensions = [e.strip() for e in ext.split(",")] if ext else None
+
+    llm_client = None
+    llm_classify_fn = None
+    if use_llm:
+        llm_client = _get_llm_client()
+        from src.intelligence.classifier import classify_file
+        llm_classify_fn = classify_file
+        click.echo("[info] Using LLM classification")
+
+    organizer = FileOrganizer(
+        output_dir=out,
+        mode=mode,
+        subdir_by_type=subdir_by_type,
+        action=action,
+        recursive=not no_recursive,
+        extensions=extensions,
+        llm_classify_fn=llm_classify_fn,
+        llm_client=llm_client,
+    )
+
+    click.echo(f"Organizing '{src_dir}' → '{out}' (mode={mode}, action={action})...")
+    summary = organizer.organize_directory(src_dir)
+
+    # Print per-file results
+    for r in summary.results:
+        src_rel = os.path.relpath(r.src, src_dir)
+        dst_rel = os.path.relpath(r.dst, out) if r.success else "—"
+        status = "ok" if r.success else "fail"
+        click.echo(f"  [{status}] {src_rel}")
+        if r.success:
+            click.echo(f"        → {r.category}/{os.path.basename(r.dst)}")
+        else:
+            click.echo(f"        error: {r.error}")
+
+    # Summary
+    click.echo("")
+    click.echo(f"Done: {summary.succeeded} ok, {summary.failed} failed  "
+               f"(total {summary.total})")
+    click.echo("")
+    click.echo("Category breakdown:")
+    for cat, count in summary.by_category().items():
+        click.echo(f"  {cat:16s} {count}")
+
+    # Sync organized output to NAS
+    nas_out = os.environ.get("OUTPUT_DIR_NAS", _NAS_OUT)
+    _sync_to_nas(out, nas_out)
+
+
+# ── convert command ──────────────────────────────────────────────────────────
+
+@cli.command("convert")
+@click.argument("input_path")
+@click.argument("to_format")
+@click.option("--output", "-o", default=None, help="Output file path (default: same dir, new extension)")
+def convert_cmd(input_path, to_format, output):
+    """Convert a file between formats (pdf/md/docx/txt).
+
+    \b
+    Examples:
+      python main.py convert report.pdf md
+      python main.py convert notes.md docx
+      python main.py convert data.docx pdf -o /tmp/data.pdf
+    """
+    from src.converter import get_converter, supported_pairs
+
+    if not os.path.isfile(input_path):
+        click.echo(f"[error] File not found: {input_path}", err=True)
+        sys.exit(1)
+
+    from_ext = os.path.splitext(input_path)[1].lower()
+    to_ext = to_format if to_format.startswith(".") else f".{to_format.lower()}"
+
+    if output is None:
+        base = os.path.splitext(input_path)[0]
+        output = base + to_ext
+
+    try:
+        converter = get_converter(from_ext, to_ext)
+    except ValueError as e:
+        click.echo(f"[error] {e}", err=True)
+        pairs = supported_pairs()
+        click.echo("Supported conversions:", err=True)
+        for f, t in sorted(pairs):
+            click.echo(f"  {f} → {t}", err=True)
+        sys.exit(1)
+
+    result = converter.convert(input_path, output)
+    if result.success:
+        click.echo(f"[ok] {result.message}")
+    else:
+        click.echo(f"[error] {result.message}", err=True)
+        sys.exit(1)
 
 
 # ── run command (full pipeline) ───────────────────────────────────────────────

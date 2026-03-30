@@ -12,3 +12,6 @@ python-frontmatter
 
 # Directory watching
 watchdog>=3.0.0
+
+# Format conversion (PDF generation)
+fpdf2>=2.7.0
