@@ -6,6 +6,7 @@ python-dotenv
 pyyaml
 
 # File parsers
+opendataloader-pdf>=2.0.0
 pypdf>=3.0.0
 python-docx
 python-frontmatter
